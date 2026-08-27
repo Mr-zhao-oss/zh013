@@ -1,0 +1,4 @@
+DualSubiOS build artifacts
+build/
+*.xcarchive
+Payload/

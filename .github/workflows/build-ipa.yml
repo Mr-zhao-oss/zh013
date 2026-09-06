@@ -34,7 +34,15 @@ jobs:
       - name: Build archive (use workspace if Pods installed)
         run: |
           if [ -f "PhoneClaw.xcworkspace" ]; then
-            echo "使用 xcworkspace (CocoaPods 已安装)"
+            echo "先 build 一次让 Pods 产物生成..."
+            xcodebuild build \
+              -workspace PhoneClaw.xcworkspace \
+              -scheme PhoneClaw \
+              -configuration Release \
+              -destination "generic/platform=iOS" \
+              CODE_SIGNING_ALLOWED=NO \
+              DEVELOPMENT_TEAM="" 2>&1 || true
+            echo "再 archive..."
             xcodebuild archive \
               -workspace PhoneClaw.xcworkspace \
               -scheme PhoneClaw \
@@ -46,7 +54,6 @@ jobs:
               CODE_SIGN_IDENTITY="" \
               DEVELOPMENT_TEAM="" 2>&1
           else
-            echo "使用 xcodeproj (无 Pods)"
             xcodebuild archive \
               -project PhoneClaw.xcodeproj \
               -scheme PhoneClaw \

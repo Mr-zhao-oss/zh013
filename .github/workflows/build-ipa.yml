@@ -1,122 +1,57 @@
 name: Build iOS IPA
 
-# 触发条件：推送到 main 分支 或 手动触发
 on:
   push:
-    branches: [ main, master ]
-    paths:
-      - 'PhoneClaw/**'
-      - '.github/workflows/build-ipa.yml'
-  workflow_dispatch:  # 允许手动从 GitHub 网页触发
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build IPA
-    runs-on: macos-15  # GitHub 免费提供的 macOS 云主机 (Xcode 16)
-    timeout-minutes: 60
+    runs-on: macos-latest
+    timeout-minutes: 90
 
     steps:
-      # ── 1. 拉取代码 ──
-      - name: 📥 Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: false
-          fetch-depth: 1
 
-      # ── 2. 选择 Xcode 版本 ──
-      - name: 🛠 Select Xcode 16.2
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '16.2'
+      - name: List Xcode
+        run: xcodebuild -version
 
-      # ── 3. 列出 Xcode 版本确认 ──
-      - name: ✅ Verify Xcode
-        run: |
-          xcodebuild -version
-          swift --version
-          echo "SDKROOT=$SDKROOT"
-
-      # ── 4. 解析 SwiftPM 依赖 (让 xcodebuild 提前拉取, 避免超时) ──
-      - name: 📦 Resolve SwiftPM dependencies
-        run: |
-          cd PhoneClaw
-          xcodebuild \
-            -resolvePackageDependencies \
-            -project PhoneClaw.xcodeproj \
-            -scheme PhoneClaw \
-            -clonedSourcePackagesDirPath ../spm-packages 2>&1 || true
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project PhoneClaw.xcodeproj -scheme PhoneClaw 2>&1 || true
         continue-on-error: true
 
-      # ── 5. 构建 Archive (无签名, 用于自用侧载) ──
-      #    CODE_SIGNING_ALLOWED=NO  → 不需要开发者证书
-      #    生成的 .xcarchive 可导出为未签名 IPA
-      - name: 🏗 Build Archive (unsigned, for sideloading)
+      - name: Build archive
         run: |
-          cd PhoneClaw
           xcodebuild archive \
             -project PhoneClaw.xcodeproj \
             -scheme PhoneClaw \
             -configuration Release \
             -destination "generic/platform=iOS" \
-            -archivePath ../build/PhoneClaw.xcarchive \
+            -archivePath build/PhoneClaw.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=NO \
-            DEVELOPMENT_TEAM="" \
-            CLONED_SOURCE_PACKAGES_DIR_PATH=../spm-packages \
-            2>&1
-        env:
-          CI: "false"  # 避免某些包在 CI 环境报错
+            DEVELOPMENT_TEAM="" 2>&1 || true
 
-      # ── 6. 导出未签名 IPA ──
-      - name: 📦 Export unsigned IPA
-        run: |
-          mkdir -p build/ipa-output
-          xcodebuild -exportArchive \
-            -archivePath build/PhoneClaw.xcarchive \
-            -exportPath build/ipa-output \
-            -exportOptionsPlist ExportOptions.plist \
-            CODE_SIGNING_ALLOWED=NO 2>&1 || true
-
-      # ── 7. 如果标准导出失败, 用 fallback 方法打包 .app 为 IPA ──
-      - name: 📦 Fallback: package .app to IPA
+      - name: Package IPA
         if: always()
         run: |
-          if [ ! -f "build/ipa-output/PhoneClaw.ipa" ]; then
-            echo "标准导出失败, 用 fallback 方法..."
-            APP_PATH=$(find build/PhoneClaw.xcarchive -name "PhoneClaw.app" -type d | head -1)
-            if [ -n "$APP_PATH" ]; then
-              echo "找到 .app: $APP_PATH"
-              mkdir -p build/ipa-fallback/Payload
-              cp -R "$APP_PATH" build/ipa-fallback/Payload/
-              cd build/ipa-fallback
-              zip -r PhoneClaw.ipa Payload/
-              echo "Fallback IPA 生成成功"
-            else
-              echo "❌ 没找到 .app, 构建可能失败了"
-            fi
+          APP=$(find build -name "PhoneClaw.app" -type d 2>/dev/null | head -1)
+          if [ -n "$APP" ]; then
+            mkdir -p ipa/Payload
+            cp -R "$APP" ipa/Payload/
+            cd ipa && zip -r PhoneClaw.ipa Payload/
+            echo "IPA 打包成功"
+          else
+            echo "没找到 .app，构建可能失败了"
+            exit 1
           fi
 
-      # ── 8. 上传 IPA 作为构建产物 (在 Actions 页面可下载) ──
-      - name: 🚀 Upload IPA artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload IPA
         if: always()
-        with:
-          name: PhoneClaw-iOS-IPA
-          path: |
-            build/ipa-output/*.ipa
-            build/ipa-fallback/*.ipa
-          retention-days: 30  # 保留 30 天
-          if-no-files-found: warn
-
-      # ── 9. 上传构建日志 (调试用) ──
-      - name: 📋 Upload build logs
-        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
-          path: |
-            ~/Library/Developer/Xcode/DerivedData/*/Logs/**/*.xcactivitylog
-            build/**/*.log
-          retention-days: 7
+          name: PhoneClaw-IPA
+          path: ipa/PhoneClaw.ipa
+          retention-days: 30

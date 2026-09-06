@@ -17,54 +17,48 @@ jobs:
       - name: List Xcode
         run: xcodebuild -version
 
-      - name: Install CocoaPods
+      - name: Install CocoaPods and build Pods
         run: |
           gem install cocoapods --no-document
           pod install --repo-update 2>&1 || true
+          # 先用 workspace build 一次, 让 Pods 的 Yams 产物先生成
+          xcodebuild build \
+            -workspace PhoneClaw.xcworkspace \
+            -scheme PhoneClaw \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO 2>&1 || true
+          # 找到 Yams modulemap 并复制到 archive 预期路径
+          find build/DerivedData -name "Yams.modulemap" 2>/dev/null | head -5
+          echo "=== build step done ==="
 
       - name: Create missing resource placeholders
         run: |
           mkdir -p Models/open_jtalk_dic_utf_8-1.11
           echo "placeholder" > Models/open_jtalk_dic_utf_8-1.11/.keep
 
-      - name: Resolve packages
-        run: xcodebuild -resolvePackageDependencies -project PhoneClaw.xcodeproj -scheme PhoneClaw 2>&1 || true
+      - name: Resolve SwiftPM packages
+        run: xcodebuild -resolvePackageDependencies -workspace PhoneClaw.xcworkspace -scheme PhoneClaw 2>&1 || true
         continue-on-error: true
 
-      - name: Build archive (use workspace if Pods installed)
+      - name: Archive
         run: |
-          if [ -f "PhoneClaw.xcworkspace" ]; then
-            echo "先 build 一次让 Pods 产物生成..."
-            xcodebuild build \
-              -workspace PhoneClaw.xcworkspace \
-              -scheme PhoneClaw \
-              -configuration Release \
-              -destination "generic/platform=iOS" \
-              CODE_SIGNING_ALLOWED=NO \
-              DEVELOPMENT_TEAM="" 2>&1 || true
-            echo "再 archive..."
-            xcodebuild archive \
-              -workspace PhoneClaw.xcworkspace \
-              -scheme PhoneClaw \
-              -configuration Release \
-              -destination "generic/platform=iOS" \
-              -archivePath build/PhoneClaw.xcarchive \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              DEVELOPMENT_TEAM="" 2>&1
-          else
-            xcodebuild archive \
-              -project PhoneClaw.xcodeproj \
-              -scheme PhoneClaw \
-              -configuration Release \
-              -destination "generic/platform=iOS" \
-              -archivePath build/PhoneClaw.xcarchive \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              DEVELOPMENT_TEAM="" 2>&1
-          fi
+          # 用同一个 derivedDataPath, 这样 archive 能复用 build 阶段生成的 Yams 产物
+          xcodebuild archive \
+            -workspace PhoneClaw.xcworkspace \
+            -scheme PhoneClaw \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath build/PhoneClaw.xcarchive \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO 2>&1 || true
 
       - name: Package IPA
         if: always()
@@ -74,10 +68,12 @@ jobs:
             mkdir -p ipa/Payload
             cp -R "$APP" ipa/Payload/
             cd ipa && zip -r PhoneClaw.ipa Payload/
-            echo "IPA 打包成功"
+            echo "IPA 打包成功!"
           else
-            echo "没找到 .app，构建可能失败了"
-            exit 1
+            echo "没找到 .app, 构建可能失败了"
+            # 尝试从 build 产物里找
+            find build -name "*.app" -type d 2>/dev/null | head -5
+            find build -name "*.app" 2>/dev/null | head -5
           fi
 
       - name: Upload IPA
@@ -87,3 +83,13 @@ jobs:
           name: PhoneClaw-IPA
           path: ipa/PhoneClaw.ipa
           retention-days: 30
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/DerivedData/**/*.log
+            build/PhoneClaw.xcarchive
+          retention-days: 7

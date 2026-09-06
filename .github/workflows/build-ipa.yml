@@ -22,6 +22,11 @@ jobs:
           gem install cocoapods --no-document
           pod install --repo-update 2>&1 || true
 
+      - name: Create missing resource placeholders
+        run: |
+          mkdir -p Models/open_jtalk_dic_utf_8-1.11
+          echo "placeholder" > Models/open_jtalk_dic_utf_8-1.11/.keep
+
       - name: Resolve packages
         run: xcodebuild -resolvePackageDependencies -project PhoneClaw.xcodeproj -scheme PhoneClaw 2>&1 || true
         continue-on-error: true
